@@ -86,8 +86,14 @@ locations = {
 @st.cache_data
 def load_base_data():
     try:
-        if os.path.exists("data/EtO_Risk_NJ_2020.gpkg") and os.path.exists("data/EtO_Facilities_NJ.gpkg"):
-            blocks = gpd.read_file("data/EtO_Risk_NJ_2020.gpkg")
+        if os.path.exists("data/EtO_Risk_NJ_2020.parquet") and os.path.exists("data/EtO_Facilities_NJ.gpkg"):
+            # Load only necessary columns to save memory and speed up processing
+            cols_to_load = ['geometry', RISK_COL]
+            # Read parquet efficiently
+            all_cols = gpd.read_parquet("data/EtO_Risk_NJ_2020.parquet", columns=None).columns.tolist()
+            filtered_cols = [c for c in cols_to_load if c in all_cols]
+            
+            blocks = gpd.read_parquet("data/EtO_Risk_NJ_2020.parquet", columns=filtered_cols if filtered_cols else None)
             packages = gpd.read_file("data/EtO_Facilities_NJ.gpkg")
             
             if blocks.crs != "EPSG:4326":
@@ -95,7 +101,8 @@ def load_base_data():
             if packages.crs != "EPSG:4326":
                 packages = packages.to_crs("EPSG:4326")
                 
-            blocks['geometry'] = blocks['geometry'].simplify(tolerance=0.001, preserve_topology=True)
+            # Aggressive and clean simplification for blazing-fast map rendering
+            blocks['geometry'] = blocks['geometry'].simplify(tolerance=0.002, preserve_topology=True)
             return blocks, packages, True
     except Exception as e:
         print(f"GIS load note: {e}")
