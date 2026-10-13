@@ -4,3 +4,6 @@ geopandas
 shapely
 folium
 streamlit-folium
+streamlit-geolocation
+pyarrow
+plotly
