@@ -292,7 +292,7 @@ with tab_map:
 
             if use_gps_toggle:
                 if not user_loc or not user_loc.get('latitude') or not user_loc.get('longitude'):
-                    st.warning("⚠️ **Location Access Required:** Please allow browser location access in your address bar to enable GPS tracking.")
+                    st.warning("⚠️ **Location Access Required:** Please click the ⊙ GPS button above 'Center on GPS', then allow location access when your browser asks for permission.")
                 else:
                     st.session_state['current_lat'] = user_loc['latitude']
                     st.session_state['current_lon'] = user_loc['longitude']
@@ -1082,9 +1082,19 @@ with tab_dev:
     
     st.markdown("### 🛑 The Motivation Behind EcoRisk NJ")
     st.markdown("""
-    **Why build EcoRisk NJ?** The inspiration is deeply personal. Growing up with generational awareness of historical industrial disasters—specifically the **[Bhopal Gas Tragedy](https://en.wikipedia.org/wiki/Bhopal_disaster)** that impacted family history (where relatives, including his grandfather, lived through and narrowly escaped the disaster zone)—developer Anvay Shukla recognized a silent, recurring danger: communities often live right next to hazardous industrial zones without truly knowing what is in the air they breathe.
-    
-    While state and federal data exist, they are often buried in complex government databases. **EcoRisk NJ** was built to bridge this transparency gap—transforming raw toxic release inventories and computational cancer risk models into an intuitive public health platform that empowers residents, patients, and local advocates before environmental risks turn into health crises.
+    **Why did I build EcoRisk NJ?**
+
+    Growing up in New Jersey, I often noticed large industrial facilities and smoke rising into the sky during highway drives. As a child, I used to imagine that the smoke would eventually become part of the clouds. As I got older, though, I began wondering what those facilities were releasing into the air and how it might affect the people living nearby.
+
+    My interest in health also comes from personal experience. When I was four years old, I underwent surgery for chronic adenoid problems after struggling with breathing difficulties. That experience sparked my interest in medicine and made me more aware of how important respiratory health is to everyday life.
+
+    Taking AP Environmental Science helped me connect these interests. Learning about pollution, environmental hazards, and their effects on human health made me realize that protecting people's health involves more than treating illnesses. It also means understanding the environmental conditions that may contribute to them.
+
+    As someone who hopes to become a physician, I wanted to explore that connection further. When I began researching ethylene oxide (EtO), I was particularly interested in how a chemical used to sterilize medical equipment could also pose cancer risks through long-term exposure. I discovered that the EPA had extensive environmental data available, but interpreting it wasn't always straightforward.
+
+    That inspired me to develop EcoRisk NJ, combining my interests in medicine, environmental science, and programming to make complex environmental health information easier for New Jersey residents to explore and understand.
+
+    — Anvay Shukla, Developer
     """)
 
 # --- TAB 6: RESEARCH PAPER ---
@@ -1109,7 +1119,6 @@ with tab_paper:
     st.markdown("---")
     st.markdown("### 📖 Research Paper Pages (1–13)")
 
-    # Responsive CSS: Default 900px on Desktop, 100% on Mobile
     st.markdown("""
     <style>
     .research-img-container {
@@ -1119,8 +1128,8 @@ with tab_paper:
         margin-bottom: 20px;
     }
     .research-img-container img {
-        max-width: 900px !important; /* Desktop: Default 900px width */
-        width: 100% !important;     /* Mobile: Auto 100% full width */
+        max-width: 900px !important;
+        width: 100% !important;
         height: auto !important;
         border-radius: 8px;
         box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
