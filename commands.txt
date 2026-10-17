@@ -1,3 +1,5 @@
 cd C:\Users\gguru\OneDrive\Documents\GitHub\ecorisk-nj
-
 python -m streamlit run app.py
+
+pip install pymupdf
+python pdf_to_images.py

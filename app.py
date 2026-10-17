@@ -284,7 +284,7 @@ with tab_map:
     
     with col_ctrl:
         with st.container(border=True):
-            st.markdown("### Controls")
+            st.markdown("#### 🎯 Region Controls")
             st.markdown("<p style='font-size: 0.9rem; font-weight: 600; color: #1E293B; margin-bottom: 8px;'>📅 Dataset: 2020 Baseline Model</p>", unsafe_allow_html=True)
             
             user_loc = streamlit_geolocation()
@@ -1105,14 +1105,56 @@ with tab_paper:
             mime="application/pdf",
             use_container_width=True
         )
-        
-        st.markdown("---")
-        
-        base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
-        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="900px" type="application/pdf" style="border-radius: 10px; border: 1px solid #CBD5E1;"></iframe>'
-        st.markdown(pdf_display, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("### 📖 Research Paper Pages (1–13)")
+
+    # Responsive CSS: Default 900px on Desktop, 100% on Mobile
+    st.markdown("""
+    <style>
+    .research-img-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+    .research-img-container img {
+        max-width: 900px !important; /* Desktop: Default 900px width */
+        width: 100% !important;     /* Mobile: Auto 100% full width */
+        height: auto !important;
+        border-radius: 8px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+        border: 1px solid #CBD5E1;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    img_folder = "Research Paper Images"
+    if os.path.exists(img_folder):
+        for i in range(1, 14):
+            img_path_png = os.path.join(img_folder, f"{i}.png")
+            img_path_jpg = os.path.join(img_folder, f"{i}.jpg")
+            
+            target_path = img_path_png if os.path.exists(img_path_png) else (img_path_jpg if os.path.exists(img_path_jpg) else None)
+            
+            if target_path:
+                with open(target_path, "rb") as img_file:
+                    encoded_img = base64.b64encode(img_file.read()).decode()
+                
+                st.markdown(f"""
+                <div class="research-img-container">
+                    <div>
+                        <a href="data:image/png;base64,{encoded_img}" target="_blank" title="Click to view full image in new tab">
+                            <img src="data:image/png;base64,{encoded_img}" alt="Page {i}">
+                        </a>
+                        <p style="text-align: center; font-size: 0.85rem; color: #64748B; margin-top: 6px;">Page {i} of 13 — <i>(Click image to open full resolution)</i></p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            st.markdown("---")
     else:
-        st.warning(f"⚠️ Research paper PDF file (`{pdf_filename}`) was not found in the root directory. Please verify that the PDF is placed alongside `app.py`.")
+        st.warning(f"⚠️ Folder `{img_folder}` was not found. Please make sure the folder containing pages 1 to 13 is placed in your project root.")
 
 st.markdown("---")
 st.caption("EcoRisk NJ | Designed for community impact.")
