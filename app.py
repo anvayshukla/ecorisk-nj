@@ -9,10 +9,12 @@ import altair as alt
 import os
 import math
 import numpy as np
+import pyarrow.parquet as pq
+import base64
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="EcoRisk NJ | Community Air Toxics Explorer",
+    page_title="EcoRisk NJ | Cancer & Community Air Toxics Explorer",
     page_icon="🛡️",
     layout="wide"
 )
@@ -23,11 +25,29 @@ st.markdown("""
     .main {
         background-color: #F8FAFC;
     }
+    .block-container {
+        padding-top: 1.5rem !important;
+        padding-bottom: 0rem !important;
+    }
     div.stMetric {
         background-color: #FFFFFF;
         border: 1px solid #E2E8F0;
-        padding: 14px 18px;
-        border-radius: 14px;
+        padding: 8px 10px !important;
+        border-radius: 10px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    div.stMetric label {
+        font-size: 0.75rem !important;
+        white-space: nowrap !important;
+    }
+    div.stMetric div[data-testid="stMetricValue"] {
+        font-size: 1.1rem !important;
+    }
+    .exact-risk-card {
+        background-color: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        padding: 16px;
+        border-radius: 12px;
         box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     h1, h2, h3 {
@@ -44,18 +64,21 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ EcoRisk NJ: Community Air Toxics Explorer")
-st.markdown("### *Advanced Environmental Justice & Industrial Exposure Intelligence*")
+# --- Clean Header Section ---
+st.caption("Advanced Environmental Justice & Industrial Exposure Intelligence")
+st.title("🛡️ EcoRisk NJ: Cancer & Community Air Toxics Explorer")
 
 RISK_COL = "ETHYLENE_OXIDE_RISK_R2_2020_Total Cancer Risk (per million)"
 DEFAULT_LAT, DEFAULT_LON = 40.5187, -74.4121  # Middlesex / Edison Hub
 DEFAULT_RADIUS_MILES = 5
 
-# Initialize Session State
+# Initialize Session State safely
 if 'current_lat' not in st.session_state:
     st.session_state['current_lat'] = DEFAULT_LAT
 if 'current_lon' not in st.session_state:
     st.session_state['current_lon'] = DEFAULT_LON
+if 'use_gps_checked' not in st.session_state:
+    st.session_state['use_gps_checked'] = False
 
 locations = {
     "Middlesex County (Edison Hub)": {"lat": 40.5187, "lon": -74.4121},
@@ -86,22 +109,22 @@ locations = {
 @st.cache_data
 def load_base_data():
     try:
-        if os.path.exists("data/EtO_Risk_NJ_2020.parquet") and os.path.exists("data/EtO_Facilities_NJ.gpkg"):
-            # Load only necessary columns to save memory and speed up processing
+        parquet_path = "data/EtO_Risk_NJ_2020.parquet"
+        gpkg_path = "data/EtO_Facilities_NJ.gpkg"
+        if os.path.exists(parquet_path) and os.path.exists(gpkg_path):
             cols_to_load = ['geometry', RISK_COL]
-            # Read parquet efficiently
-            all_cols = gpd.read_parquet("data/EtO_Risk_NJ_2020.parquet", columns=None).columns.tolist()
+            pf = pq.ParquetFile(parquet_path)
+            all_cols = pf.schema.names
             filtered_cols = [c for c in cols_to_load if c in all_cols]
             
-            blocks = gpd.read_parquet("data/EtO_Risk_NJ_2020.parquet", columns=filtered_cols if filtered_cols else None)
-            packages = gpd.read_file("data/EtO_Facilities_NJ.gpkg")
+            blocks = gpd.read_parquet(parquet_path, columns=filtered_cols if filtered_cols else None)
+            packages = gpd.read_file(gpkg_path)
             
             if blocks.crs != "EPSG:4326":
                 blocks = blocks.to_crs("EPSG:4326")
             if packages.crs != "EPSG:4326":
                 packages = packages.to_crs("EPSG:4326")
                 
-            # Aggressive and clean simplification for blazing-fast map rendering
             blocks['geometry'] = blocks['geometry'].simplify(tolerance=0.002, preserve_topology=True)
             return blocks, packages, True
     except Exception as e:
@@ -152,12 +175,14 @@ def get_qgis_color(score):
     else:
         return "#FBCFE8"
 
-# --- 3. Clean Dashboard Layout with 4 Tabs ---
-tab_map, tab_multiyear, tab_analytics, tab_about = st.tabs([
-    "🗺️ 2020 EPA Baseline Risk Model", 
-    "📈 Multi-Year Regional Ethylene Oxide Emission Explorer (2020–2024)", 
-    "📊 Facility & Emission Trends Analytics",
-    "💡 About, Metrics & Action"
+# --- 3. Clean Dashboard Layout with 6 Optimized Tabs ---
+tab_map, tab_multiyear, tab_analytics, tab_about, tab_dev, tab_paper = st.tabs([
+    "🗺️ Risk Model", 
+    "📈 Multi-Year Explorer", 
+    "📊 Analytics & Trends",
+    "💡 About EcoRisk NJ",
+    "👨‍💻 Meet the Developer",
+    "📄 Research Paper"
 ])
 
 # --- TAB 1: 2020 EPA BASELINE RISK MODEL ---
@@ -165,23 +190,116 @@ with tab_map:
     with st.expander("📌 Quick-Start Guide for Judges & Users", expanded=False):
         st.markdown("""
         Welcome to **EcoRisk NJ**! Follow these quick steps to explore local air toxics exposure:
-        1. **Select a Target Hub or GPS:** Choose a New Jersey county hub from the sidebar dropdown or toggle GPS location sharing.
+        1. **Select a Target Hub or GPS:** Choose a New Jersey county hub from the sidebar dropdown or check **Center on GPS** (ensure browser location permission is enabled via the address bar icon).
         2. **Adjust Analysis Radius:** Use the slider in the control panel to change the buffer zone (1, 5, or 10 miles).
         3. **Inspect Risk & Facilities:** Click anywhere **within the New Jersey regional map boundaries** to relocate the analysis center and view exact census block risk scores and nearby industrial facilities below.
         4. **Explore Multi-Year Trends:** Switch to Tabs 2 and 3 to examine multi-year industrial emission pounds (2020–2024) across the regional airshed.
         """)
 
-    col_ctrl, col_mapview = st.columns([1, 2.5])
+    current_radius = st.session_state.get('radius_miles_slider', DEFAULT_RADIUS_MILES)
+
+    temp_radius_degrees = current_radius / 69.0
+    block_count = 0
+    local_facilities_list = []
+    
+    if has_real_data and blocks_gdf is not None:
+        center_point = Point(st.session_state['current_lon'], st.session_state['current_lat'])
+        buffered_poly = center_point.buffer(temp_radius_degrees)
+        possible_matches_index = list(blocks_gdf.sindex.intersection(buffered_poly.bounds))
+        possible_matches = blocks_gdf.iloc[possible_matches_index]
+        local_blocks = possible_matches[possible_matches.intersects(buffered_poly)].copy()
+        if not local_blocks.empty:
+            block_count = len(local_blocks)
+
+    if has_real_data and facilities_gdf is not None and len(_fac_lats) > 0:
+        cur_lat = st.session_state['current_lat']
+        cur_lon = st.session_state['current_lon']
+        cos_lat = math.cos(math.radians(cur_lat))
+        d_lat = (_fac_lats - cur_lat) * 69.0
+        d_lon = (_fac_lons - cur_lon) * 69.0 * cos_lat
+        distances = np.sqrt(d_lat**2 + d_lon**2)
+
+        for pos, (_, fac) in enumerate(facilities_gdf.iterrows()):
+            dist_miles = distances[pos]
+            if np.isnan(dist_miles):
+                continue
+            geom = fac.geometry
+            fac_lat, fac_lon = geom.y, geom.x
+
+            fac_name = None
+            for col in fac.index:
+                if any(k in col.lower() for k in ['name', 'facility', 'fac_nam', 'primary_nm']):
+                    val = fac[col]
+                    if pd.notna(val) and isinstance(val, str) and len(val.strip()) > 1:
+                        fac_name = val.strip()
+                        break
+            if not fac_name:
+                fac_name = "Ethylene Oxide Industrial Facility"
+
+            fac_city = None
+            for col in fac.index:
+                if any(k in col.lower() for k in ['city', 'municipality', 'mun', 'town']):
+                    val = fac[col]
+                    if pd.notna(val) and isinstance(val, str) and len(val.strip()) > 1:
+                        fac_city = val.strip()
+                        break
+            if not fac_city:
+                fac_city = "New Jersey"
+
+            fac_street = None
+            for col in fac.index:
+                if any(k in col.lower() for k in ['address', 'addr', 'location_ad', 'street']):
+                    val = fac[col]
+                    if pd.notna(val) and isinstance(val, str) and len(val.strip()) > 1:
+                        fac_street = val.strip()
+                        break
+            if not fac_street:
+                fac_street = ""
+
+            fac_zip = None
+            for col in fac.index:
+                if any(k in col.lower() for k in ['zip', 'postal', 'mail_zip']):
+                    val = fac[col]
+                    if pd.notna(val):
+                        s_val = str(val).strip()
+                        if len(s_val) >= 5:
+                            fac_zip = s_val[:5]
+                            break
+            if not fac_zip:
+                fac_zip = ""
+
+            addr_parts = [p for p in [fac_street, fac_city, "NJ", fac_zip] if p]
+            full_address = ", ".join(addr_parts) if addr_parts else "New Jersey"
+
+            if dist_miles <= current_radius:
+                local_facilities_list.append({
+                    "Facility Name": fac_name,
+                    "Address": full_address,
+                    "Latitude": round(fac_lat, 4),
+                    "Longitude": round(fac_lon, 4),
+                    "Distance (mi)": round(dist_miles, 1)
+                })
+
+    col_ctrl, col_mapview = st.columns([1.0, 2.6])
     
     with col_ctrl:
         with st.container(border=True):
-            st.markdown("### 🎯 Drill-Down Controls")
-            st.markdown("`📅 Dataset Year: 2020 Baseline Model`")
-            st.info("💡 **Tip:** Click anywhere within the New Jersey map boundary to relocate the analysis center instantly!")
+            st.markdown("### Controls")
+            st.markdown("<p style='font-size: 0.9rem; font-weight: 600; color: #1E293B; margin-bottom: 8px;'>📅 Dataset: 2020 Baseline Model</p>", unsafe_allow_html=True)
             
-            st.markdown("#### 📍 GPS Location Access")
             user_loc = streamlit_geolocation()
-            use_gps = st.checkbox("Center map on my device location", value=False)
+            use_gps_toggle = st.checkbox("📍 Center on GPS", key='use_gps_checked')
+
+            if use_gps_toggle:
+                if not user_loc or not user_loc.get('latitude') or not user_loc.get('longitude'):
+                    st.warning("⚠️ **Location Access Required:** Please allow browser location access in your address bar to enable GPS tracking.")
+                else:
+                    st.session_state['current_lat'] = user_loc['latitude']
+                    st.session_state['current_lon'] = user_loc['longitude']
+                    st.warning("⚠️ **GPS Active:** Please uncheck 'Center on GPS' to freely select other counties or click on the map.")
+                    st.markdown("<p style='font-size: 0.8rem; color: #16A34A; font-weight: 600; margin-top: 2px;'>🟢 GPS Active</p>", unsafe_allow_html=True)
+            else:
+                st.markdown("<p style='font-size: 0.8rem; color: #64748B; margin-top: 2px;'>⚪ GPS Standby</p>", unsafe_allow_html=True)
             
             def on_county_change():
                 selected_name = st.session_state['county_selectbox']
@@ -189,31 +307,27 @@ with tab_map:
                 st.session_state['current_lat'] = coords["lat"]
                 st.session_state['current_lon'] = coords["lon"]
 
-            if use_gps and user_loc.get('latitude') and user_loc.get('longitude'):
-                st.session_state['current_lat'] = user_loc['latitude']
-                st.session_state['current_lon'] = user_loc['longitude']
-                st.success("📍 GPS Locked In!")
-            else:
-                st.selectbox(
-                    "Target County / Hub:", 
-                    list(locations.keys()), 
-                    key='county_selectbox',
-                    on_change=on_county_change
-                )
+            st.selectbox(
+                "Target County / Hub:", 
+                list(locations.keys()), 
+                key='county_selectbox',
+                on_change=on_county_change,
+                help="💡 Tip: Click anywhere within the New Jersey map boundary to relocate the analysis center instantly!"
+            )
             
             radius_miles = st.select_slider(
                 "Analysis Radius (Miles):",
                 options=[1, 5, 10],
-                value=DEFAULT_RADIUS_MILES
+                value=DEFAULT_RADIUS_MILES,
+                key='radius_miles_slider'
             )
 
-        with st.container(border=True):
-            st.markdown("#### ⚕️ Cancer Risk Legend")
+        with st.expander("⚕️ Air Toxics Cancer Risk Scale & Legend", expanded=True):
             st.markdown("""
-            <p style='font-size: 0.80rem; color: #475569; margin-bottom: 8px; line-height: 1.4;'>
-            <b>What this means:</b> Estimated excess lifetime cancer cases per 1 million residents exposed to continuous industrial air emissions over a 70-year lifespan.
+            <p style='font-size: 0.78rem; color: #475569; margin-bottom: 8px; line-height: 1.3;'>
+            <b>What this means:</b> Estimated excess lifetime cancer cases per 1M residents exposed continuously over 70 years.
             </p>
-            <span style='color:#4A0404; font-weight:bold;'>■</span> <b>Extreme:</b> > 100 cases / million<br>
+            <span style='color:#4A0404; font-weight:bold;'>■</span> <b>Extreme:</b> > 100 / million<br>
             <span style='color:#7F1D1D; font-weight:bold;'>■</span> <b>High:</b> 50 – 100 / million<br>
             <span style='color:#991B1B; font-weight:bold;'>■</span> <b>Elevated:</b> 20 – 50 / million<br>
             <span style='color:#DC2626; font-weight:bold;'>■</span> <b>Moderate:</b> 10 – 20 / million<br>
@@ -221,8 +335,15 @@ with tab_map:
             <span style='color:#FBCFE8; font-weight:bold;-webkit-text-stroke: 0.5px #334155;'>■</span> <b>Lower Modeled Risk:</b> < 1 / million
             """, unsafe_allow_html=True)
 
+        with st.container(border=True):
+            with st.expander("📖 About EPA Modeling Note", expanded=False):
+                st.markdown(
+                    "Tab 1 displays the **2020 EPA AirToxScreen census block modeling dataset** "
+                    "(estimated theoretical long-term exposure risks). This represents modeled inhalation risk "
+                    "rather than direct current exposure measurement."
+                )
+
     with col_mapview:
-        radius_degrees = radius_miles / 69.0
         zoom_level = 13 if radius_miles == 1 else (12 if radius_miles == 5 else 11)
         
         m = folium.Map(
@@ -248,21 +369,19 @@ with tab_map:
             fill_opacity=0.03,
             tooltip=f"{radius_miles}-Mile Exposure Buffer"
         ).add_to(m)
-
-        block_count = 0
-        local_facilities_list = []
         
         if has_real_data and blocks_gdf is not None:
             center_point = Point(st.session_state['current_lon'], st.session_state['current_lat'])
-            buffered_poly = center_point.buffer(radius_degrees)
-            
+            buffered_poly = center_point.buffer(radius_miles / 69.0)
             possible_matches_index = list(blocks_gdf.sindex.intersection(buffered_poly.bounds))
             possible_matches = blocks_gdf.iloc[possible_matches_index]
             local_blocks = possible_matches[possible_matches.intersects(buffered_poly)].copy()
             
             if not local_blocks.empty:
-                block_count = len(local_blocks)
                 risk_field = RISK_COL
+                local_blocks['Risk_Display'] = local_blocks[risk_field].apply(
+                    lambda x: f"{float(x):.1f}" if pd.notna(x) else "N/A"
+                )
 
                 folium.GeoJson(
                     local_blocks,
@@ -273,87 +392,18 @@ with tab_map:
                         'fillOpacity': 0.4
                     },
                     tooltip=folium.GeoJsonTooltip(
-                        fields=[risk_field], 
-                        aliases=['Ethylene Oxide Cancer Risk (per million):']
+                        fields=['Risk_Display'], 
+                        aliases=['Air Toxics Cancer Risk (per million):']
                     )
                 ).add_to(m)
 
         if has_real_data and facilities_gdf is not None and len(_fac_lats) > 0:
-            cur_lat = st.session_state['current_lat']
-            cur_lon = st.session_state['current_lon']
-            cos_lat = math.cos(math.radians(cur_lat))
-
-            d_lat = (_fac_lats - cur_lat) * 69.0
-            d_lon = (_fac_lons - cur_lon) * 69.0 * cos_lat
-            distances = np.sqrt(d_lat**2 + d_lon**2)
-
-            for pos, (_, fac) in enumerate(facilities_gdf.iterrows()):
-                dist_miles = distances[pos]
-                if np.isnan(dist_miles):
-                    continue
-                
-                geom = fac.geometry
-                fac_lat, fac_lon = geom.y, geom.x
-
-                fac_name = None
-                for col in fac.index:
-                    if any(k in col.lower() for k in ['name', 'facility', 'fac_nam', 'primary_nm']):
-                        val = fac[col]
-                        if pd.notna(val) and isinstance(val, str) and len(val.strip()) > 1:
-                            fac_name = val.strip()
-                            break
-                if not fac_name:
-                    fac_name = "Ethylene Oxide Industrial Facility"
-
-                fac_city = None
-                for col in fac.index:
-                    if any(k in col.lower() for k in ['city', 'municipality', 'mun', 'town']):
-                        val = fac[col]
-                        if pd.notna(val) and isinstance(val, str) and len(val.strip()) > 1:
-                            fac_city = val.strip()
-                            break
-                if not fac_city:
-                    fac_city = "New Jersey"
-
-                fac_street = None
-                for col in fac.index:
-                    if any(k in col.lower() for k in ['address', 'addr', 'location_ad', 'street']):
-                        val = fac[col]
-                        if pd.notna(val) and isinstance(val, str) and len(val.strip()) > 1:
-                            fac_street = val.strip()
-                            break
-                if not fac_street:
-                    fac_street = ""
-
-                fac_zip = None
-                for col in fac.index:
-                    if any(k in col.lower() for k in ['zip', 'postal', 'mail_zip']):
-                        val = fac[col]
-                        if pd.notna(val):
-                            s_val = str(val).strip()
-                            if len(s_val) >= 5:
-                                fac_zip = s_val[:5]
-                                break
-                if not fac_zip:
-                    fac_zip = ""
-
-                addr_parts = [p for p in [fac_street, fac_city, "NJ", fac_zip] if p]
-                full_address = ", ".join(addr_parts) if addr_parts else "New Jersey"
-
-                if dist_miles <= radius_miles:
-                    local_facilities_list.append({
-                        "Facility Name": fac_name,
-                        "Address": full_address,
-                        "Latitude": round(fac_lat, 4),
-                        "Longitude": round(fac_lon, 4),
-                        "Distance (mi)": round(dist_miles, 1)
-                    })
-
+            for fac_item in local_facilities_list:
                 folium.Marker(
-                    location=[fac_lat, fac_lon],
-                    popup=f"<b>{fac_name}</b><br>{full_address}<br><b>Distance:</b> {dist_miles:.1f} mi",
-                    tooltip=f"{fac_name} ({fac_city}) - {dist_miles:.1f} mi",
-                    icon=folium.Icon(color='darkred' if dist_miles <= radius_miles else 'gray', icon='cloud', prefix='fa')
+                    location=[fac_item['Latitude'], fac_item['Longitude']],
+                    popup=f"<b>{fac_item['Facility Name']}</b><br>{fac_item['Address']}<br><b>Distance:</b> {fac_item['Distance (mi)']} mi",
+                    tooltip=f"{fac_item['Facility Name']} - {fac_item['Distance (mi)']} mi",
+                    icon=folium.Icon(color='darkred', icon='cloud', prefix='fa')
                 ).add_to(m)
 
         folium.Marker(
@@ -366,84 +416,104 @@ with tab_map:
         map_data = st_folium(m, use_container_width=True, height=450, returned_objects=['last_clicked'])
         
         if map_data and map_data.get('last_clicked'):
-            clicked_lat = map_data['last_clicked']['lat']
-            clicked_lon = map_data['last_clicked']['lng']
-            if clicked_lat != st.session_state['current_lat'] or clicked_lon != st.session_state['current_lon']:
-                st.session_state['current_lat'] = clicked_lat
-                st.session_state['current_lon'] = clicked_lon
-                st.rerun()
+            if use_gps_toggle:
+                st.warning("⚠️ **GPS mode is active.** Map manual clicks are disabled. Please uncheck 'Center on GPS' in the sidebar controls to explore other locations.")
+            else:
+                clicked_lat = map_data['last_clicked']['lat']
+                clicked_lon = map_data['last_clicked']['lng']
+                if clicked_lat != st.session_state['current_lat'] or clicked_lon != st.session_state['current_lon']:
+                    valid_click = True
+                    if has_real_data and blocks_gdf is not None:
+                        pt = Point(clicked_lon, clicked_lat)
+                        possible_idx = list(blocks_gdf.sindex.intersection(pt.buffer(0.001).bounds))
+                        if not possible_idx or not blocks_gdf.iloc[possible_idx].intersects(pt).any():
+                            valid_click = False
+                    
+                    if valid_click:
+                        st.session_state['current_lat'] = clicked_lat
+                        st.session_state['current_lon'] = clicked_lon
+                        st.rerun()
+                    else:
+                        st.warning("⚠️ Please select a location within New Jersey boundaries. Clicks outside New Jersey are restricted.")
         
-        kpi1, kpi2, kpi3 = st.columns(3)
-        kpi1.metric("Census Blocks Scanned", f"{block_count:,}")
-        kpi2.metric("Active Radius", f"{radius_miles} Miles")
-        kpi3.metric("Facilities in Radius", f"{len(local_facilities_list)}")
+        st.markdown(
+            f"""
+            <div style="background-color: #FFFFFF; border: 1px solid #E2E8F0; padding: 10px 16px; border-radius: 10px; display: flex; justify-content: space-around; align-items: center; margin-top: 10px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="font-size: 0.85rem; color: #334155;" title="Total Census Blocks in Region: {block_count:,}">📍 <b>Blocks in Region:</b> <span style="color: #0F172A; font-weight: 600;">{block_count:,}</span></div>
+                <div style="font-size: 0.85rem; color: #334155;" title="Active Radius Buffer: {radius_miles} Miles">🔵 <b>Radius Buffer:</b> <span style="color: #0F172A; font-weight: 600;">{radius_miles} Miles</span></div>
+                <div style="font-size: 0.85rem; color: #334155;" title="Tracked Industrial Facilities in Radius: {len(local_facilities_list)}">🏭 <b>Facilities in Radius:</b> <span style="color: #0F172A; font-weight: 600;">{len(local_facilities_list)}</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-    # --- Active Location Inspector & Health Guidance Panel ---
-    st.markdown("---")
-    st.markdown("### 🛡️ Active Location Inspector & Health Guidance")
-    
-    center_pt = Point(st.session_state['current_lon'], st.session_state['current_lat'])
-    matched_block = blocks_gdf[blocks_gdf.contains(center_pt)] if (has_real_data and blocks_gdf is not None) else gpd.DataFrame()
-
-    col_loc1, col_loc2 = st.columns([1, 2])
-    with col_loc1:
-        st.markdown(f"**📍 Target Coordinates:** `{st.session_state['current_lat']:.5f}, {st.session_state['current_lon']:.5f}`")
+        st.markdown("---")
+        st.markdown("### 🛡️ Active Location Inspector & Health Guidance")
         
-        spot_risk = 0.0
-        has_data = False
-        if not matched_block.empty:
-            raw_val = matched_block.iloc[0].get(RISK_COL, None)
-            if pd.notna(raw_val):
-                try:
-                    spot_risk = float(raw_val)
-                    st.metric("Exact Block Cancer Risk", f"{spot_risk:,.1f} / million")
-                    has_data = True
-                except (ValueError, TypeError):
+        center_pt = Point(st.session_state['current_lon'], st.session_state['current_lat'])
+        matched_block = blocks_gdf[blocks_gdf.contains(center_pt)] if (has_real_data and blocks_gdf is not None) else gpd.DataFrame()
+
+        col_loc1, col_loc2 = st.columns([1, 2])
+        with col_loc1:
+            st.markdown(f"**📍 Target Coordinates:** `{st.session_state['current_lat']:.5f}, {st.session_state['current_lon']:.5f}`")
+            
+            spot_risk = 0.0
+            has_data = False
+            if not matched_block.empty:
+                raw_val = matched_block.iloc[0].get(RISK_COL, None)
+                if pd.notna(raw_val):
+                    try:
+                        spot_risk = float(raw_val)
+                        spot_risk_str = f"{spot_risk:,.1f} / million"
+                        st.markdown(f"""
+                            <div class="exact-risk-card" title="Exact Block Cancer Risk: {spot_risk_str}">
+                                <div style="font-size: 0.75rem; color: #64748B; font-weight: 600; text-transform: uppercase; margin-bottom: 4px;">Exact Block Cancer Risk</div>
+                                <div style="font-size: 1.9rem; font-weight: 800; color: #0F172A;" title="{spot_risk_str}">{spot_risk_str}</div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        has_data = True
+                    except (ValueError, TypeError):
+                        st.metric("Exact Block Cancer Risk", "No data available")
+                else:
                     st.metric("Exact Block Cancer Risk", "No data available")
             else:
                 st.metric("Exact Block Cancer Risk", "No data available")
+
+        with col_loc2:
+            if not has_data:
+                st.info("ℹ️ **No Census Block Data Available:** Coordinates fall outside modeled geographic boundaries.")
+            elif spot_risk > 50:
+                st.error(f"⚠️ **Elevated Modeled Risk Detected ({spot_risk:,.1f} per million):** EPA estimates indicate a higher excess lifetime cancer risk associated with ethylene oxide exposure in this census block.")
+                st.markdown("""
+                **Recommended Community Actions:**
+                * **Official Air Monitoring:** Consult official NJDEP air quality advisories and EPA monitoring updates.
+                * **Ventilation Timing:** Monitor local wind direction and facility operating schedules before opening windows.
+                * **Compliance Review:** Check facility air permits and compliance records via the NJDEP Data Miner.
+                """)
+            elif spot_risk > 10:
+                st.warning(f"⚠️ **Moderate Risk Level ({spot_risk:,.1f} per million):** Monitor local air quality advisories.")
+                st.markdown("""
+                **Recommended Precautions:**
+                * Stay informed via the EPA AirToxScreen portal for regional updates.
+                * Review local facility reporting on the NJDEP Data Miner.
+                """)
+            else:
+                st.success("✅ **Lower Modeled Ethylene Oxide Risk:** This coordinate falls within census blocks showing lower estimated baseline risk values.")
+                st.markdown("""
+                **General Best Practices:**
+                * Continue standard outdoor air quality awareness and community preparedness.
+                """)
+
+        st.markdown("---")
+        st.markdown("### 🏭 Industrial Facilities Within Selected Radius (2020 Baseline)")
+        if local_facilities_list:
+            for fac in local_facilities_list:
+                with st.container(border=True):
+                    st.markdown(f"**🏭 {fac['Facility Name']}**")
+                    st.markdown(f"📍 **Address:** {fac['Address']}")
+                    st.markdown(f"🌍 **Coordinates:** `{fac['Latitude']}, {fac['Longitude']}`")
         else:
-            st.metric("Exact Block Cancer Risk", "No data available")
-
-        st.info(
-            "💡 **Note on Risk Modeling:** Tab 1 displays the **2020 EPA AirToxScreen census block modeling dataset** (estimated theoretical long-term exposure risks). This is a separate dataset from annual TRI emissions reporting and represents modeled inhalation risk rather than a direct measurement of current exposure or individual cancer incidence."
-        )
-
-    with col_loc2:
-        if not has_data:
-            st.info("ℹ️ **No Census Block Data Available:** Coordinates fall outside modeled geographic boundaries.")
-        elif spot_risk > 50:
-            st.error(f"⚠️ **Elevated Modeled Risk Detected ({spot_risk:,.1f} per million):** EPA estimates indicate a higher excess lifetime cancer risk associated with ethylene oxide exposure in this census block.")
-            st.markdown("""
-            **Recommended Community Actions:**
-            * **Official Air Monitoring:** Consult official NJDEP air quality advisories and EPA monitoring updates.
-            * **Ventilation Timing:** Monitor local wind direction and facility operating schedules before opening windows.
-            * **Compliance Review:** Check facility air permits and compliance records via the NJDEP Data Miner.
-            """)
-        elif spot_risk > 10:
-            st.warning(f"⚠️ **Moderate Risk Level ({spot_risk:,.1f} per million):** Monitor local air quality advisories.")
-            st.markdown("""
-            **Recommended Precautions:**
-            * Stay informed via the EPA AirToxScreen portal for regional updates.
-            * Review local facility reporting on the NJDEP Data Miner.
-            """)
-        else:
-            st.success("✅ **Lower Modeled Ethylene Oxide Risk:** This coordinate falls within census blocks showing lower estimated baseline risk values.")
-            st.markdown("""
-            **General Best Practices:**
-            * Continue standard outdoor air quality awareness and community preparedness.
-            """)
-
-    st.markdown("---")
-    st.markdown("### 🏭 Industrial Facilities Within Selected Radius (2020 Baseline)")
-    if local_facilities_list:
-        for fac in local_facilities_list:
-            with st.container(border=True):
-                st.markdown(f"**🏭 {fac['Facility Name']}**")
-                st.markdown(f"📍 **Address:** {fac['Address']}")
-                st.markdown(f"🌍 **Coordinates:** `{fac['Latitude']}, {fac['Longitude']}`")
-    else:
-        st.info(f"ℹ️ No major industrial ethylene oxide facilities are located directly within this specific radius buffer. Try expanding to 5 or 10 miles.")
+            st.info(f"ℹ️ No major industrial ethylene oxide facilities are located directly within this specific radius buffer. Try expanding to 5 or 10 miles.")
 
 # --- TAB 2: MULTI-YEAR REGIONAL ETHYLENE OXIDE EMISSION EXPLORER (2020–2024) ---
 with tab_multiyear:
@@ -599,16 +669,10 @@ with tab_analytics:
                     key = tri_id if tri_id and tri_id != 'NAN' else f"{fname}_{fcity}_{fst}"
                     
                     s_val = r.get('52. 5.2 - STACK AIR', None)
-                    try:
-                        stk = float(s_val) if pd.notna(s_val) else 0.0
-                    except:
-                        stk = 0.0
+                    stk = float(s_val) if pd.notna(s_val) else 0.0
 
                     f_val = r.get('51. 5.1 - FUGITIVE AIR', None)
-                    try:
-                        fug = float(f_val) if pd.notna(f_val) else 0.0
-                    except:
-                        fug = 0.0
+                    fug = float(f_val) if pd.notna(f_val) else 0.0
 
                     tot = float(stk + fug)
                     all_years_rows.append({
@@ -659,7 +723,6 @@ with tab_analytics:
     df_reg_chart = pd.DataFrame(summary_data)
     df_reg_melted = pd.DataFrame(reg_melted_rows)
 
-    # --- TOP SAAS EXECUTIVE METRIC SUMMARY CARDS (SAFE N/A FALLBACK) ---
     st.markdown("#### 📌 Key Performance Indicators (2024 Overview)")
     latest_nj_row = df_nj_chart[df_nj_chart['Year'] == '2024']
     latest_reg_row = df_reg_chart[df_reg_chart['Year'] == '2024']
@@ -674,7 +737,6 @@ with tab_analytics:
 
     st.markdown("---")
 
-    # --- TOP EMITTING FACILITIES RANKING BAR CHART ---
     st.markdown("#### 🏆 Top Emitting Facilities (Latest Reporting Year 2024)")
     st.info("💡 **Impact Visual:** Ranking top industrial facilities by total air release volume to instantly highlight primary contributors.")
     
@@ -705,7 +767,6 @@ with tab_analytics:
 
     st.markdown("---")
 
-    # --- MACRO & INDIVIDUAL FACILITY ANALYTICS EXPLORER ---
     st.markdown("### 🏭 Macro & Individual Facility Emissions Analytics")
     st.info("💡 **Feature Highlight:** Explore macro aggregated trends for New Jersey and the broader regional airshed, or drill down into specific tracked industrial facilities.")
 
@@ -861,7 +922,6 @@ with tab_analytics:
 
         st.dataframe(df_single_fac.set_index("Year"), use_container_width=True)
 
-    # --- COMPREHENSIVE MULTI-YEAR FACILITY EMISSIONS TABLE WITH SHADES OF GRAY STYLING ---
     st.markdown("---")
     st.markdown("### 🌐 Comprehensive Multi-Year Facility Emissions Matrix (2020–2024)")
     st.info("💡 **Data Integrity Update:** All tracked regional facilities across 2020–2024 are fully compiled and displayed below with absolute shades-of-gray cell coloring matching the legend exactly.")
@@ -894,7 +954,6 @@ with tab_analytics:
         col_s2.metric("Facilities with Net Increase", f"{num_increased}")
         col_s3.metric("Facilities with Net Decrease", f"{num_decreased}")
 
-        # --- SHADES OF GRAY EMISSIONS INTENSITY COLOR LEGEND ---
         st.markdown("#### 💨 Emissions Intensity Color Legend")
         st.markdown("""
         <div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 16px; font-size: 0.78rem;">
@@ -948,12 +1007,10 @@ with tab_analytics:
 
         st.table(styled_table)
 
-# --- TAB 4: ABOUT & ACTION ---
+# --- TAB 4: ABOUT ECORISK NJ ---
 with tab_about:
-    st.markdown("### 🏆 About EcoRisk NJ & Environmental Justice")
-    st.write("Built for the Congressional App Challenge. EcoRisk NJ combines high-performance spatial indexing with professional QGIS cartographic symbology.")
+    st.markdown("### 💡 About EcoRisk NJ & Scientific Methodology")
     
-    st.markdown("---")
     st.markdown("### 🧬 What is Ethylene Oxide ($C_2H_4O$) & Why We Chose It")
     st.markdown("""
     * **The Chemical & Classification:** Ethylene Oxide ($C_2H_4O$) is a highly reactive, ring-shaped gas widely used in industrial manufacturing and medical equipment sterilization. It is officially classified as a **Group 1 (Tier 1) human carcinogen** due to robust toxicological and epidemiological evidence linking it to cancer.
@@ -989,6 +1046,73 @@ with tab_about:
     * **NJDEP Data Miner:** [Review facility air permits](https://njems.nj.gov/dataminer).
     * **EPA AirToxScreen Portal:** [Learn more about national assessments](https://www.epa.gov/AirToxScreen/airtoxscreen-overview).
     """)
+
+# --- TAB 5: MEET THE DEVELOPER ---
+with tab_dev:
+    st.markdown("### 👨‍💻 Meet the Developer")
+    
+    with st.container(border=True):
+        col_img, col_bio = st.columns([1, 2.5])
+        
+        with col_img:
+            photo_path = "Anvay_Shukla_photo.png"
+            if os.path.exists(photo_path):
+                st.image(photo_path, width=200, caption="Anvay Shukla — Lead Developer")
+            else:
+                st.info("📷 Developer Photo Available")
+            
+            st.markdown("""
+            **🔗 Connect with Developer:**
+            * 💼 **[LinkedIn Profile](https://www.linkedin.com/in/anvay-shukla-a14b892aa/)**
+            * 💻 **[GitHub Repository](https://github.com/anvayshukla)**
+            """, unsafe_allow_html=True)
+
+        with col_bio:
+            st.markdown("#### Anvay Shukla")
+            st.markdown("**Junior (Grade 11) | J.P. Stevens High School — Edison, NJ**")
+            st.markdown("*Aspiring Physician-Scientist & Computational Biology Researcher*")
+            
+            st.markdown("""
+            * **Clinical & Healthcare Background:** 200+ hours of clinical support volunteering across **Hackensack Meridian Health** and **Raritan Bay Diagnostic Imaging**, assisting in diagnostic workflows, EMR intake, and patient care.
+            * **Research Focus:** Lead researcher investigating Ethylene Oxide-induced DNA alkylation, spatial cancer modeling, and cellular stress dynamics.
+            * **Community Leadership:** Founder & Chapter Lead of Edison Leo Club (Lions Clubs International).
+            """)
+
+    st.markdown("---")
+    
+    st.markdown("### 🛑 The Motivation Behind EcoRisk NJ")
+    st.markdown("""
+    **Why build EcoRisk NJ?** The inspiration is deeply personal. Growing up with generational awareness of historical industrial disasters—specifically the **[Bhopal Gas Tragedy](https://en.wikipedia.org/wiki/Bhopal_disaster)** that impacted family history (where relatives, including his grandfather, lived through and narrowly escaped the disaster zone)—developer Anvay Shukla recognized a silent, recurring danger: communities often live right next to hazardous industrial zones without truly knowing what is in the air they breathe.
+    
+    While state and federal data exist, they are often buried in complex government databases. **EcoRisk NJ** was built to bridge this transparency gap—transforming raw toxic release inventories and computational cancer risk models into an intuitive public health platform that empowers residents, patients, and local advocates before environmental risks turn into health crises.
+    """)
+
+# --- TAB 6: RESEARCH PAPER ---
+with tab_paper:
+    st.markdown("### 📄 Official Research Paper & Documentation")
+    st.markdown("Read the complete formal research study underlying **EcoRisk NJ**, prepared for the **Congressional App Challenge**.")
+    
+    pdf_filename = "EcoRisk_NJ_Ethylene_Oxide_Cancer_Research_2026.pdf"
+    
+    if os.path.exists(pdf_filename):
+        with open(pdf_filename, "rb") as pdf_file:
+            pdf_bytes = pdf_file.read()
+            
+        st.download_button(
+            label="📥 Download Official Research Paper (PDF)",
+            data=pdf_bytes,
+            file_name=pdf_filename,
+            mime="application/pdf",
+            use_container_width=True
+        )
+        
+        st.markdown("---")
+        
+        base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+        pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="900px" type="application/pdf" style="border-radius: 10px; border: 1px solid #CBD5E1;"></iframe>'
+        st.markdown(pdf_display, unsafe_allow_html=True)
+    else:
+        st.warning(f"⚠️ Research paper PDF file (`{pdf_filename}`) was not found in the root directory. Please verify that the PDF is placed alongside `app.py`.")
 
 st.markdown("---")
 st.caption("EcoRisk NJ | Designed for community impact.")

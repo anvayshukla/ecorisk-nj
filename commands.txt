@@ -1,2 +1,3 @@
-cd C:\EcoRisk App
+cd C:\Users\gguru\OneDrive\Documents\GitHub\ecorisk-nj
+
 python -m streamlit run app.py
